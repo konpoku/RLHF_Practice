@@ -1,0 +1,33 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+
+# Logs and Results
+runs/
+logs/
+*.log
+output/
+results/
+
+# Model Checkpoints
+checkpoints/
+*.pt
+*.pth
+*.bin
+*.ckpt
