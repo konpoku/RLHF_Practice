@@ -33,7 +33,14 @@ def compute_advantages(
     # TODO 2: 计算 advantages = rewards - values_detached
     # TODO 3: (可选) 如果 normalize=True，则对 advantages 做标准化：
     #         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-    raise NotImplementedError("请在 compute_advantages 中补全代码")
+    #raise NotImplementedError("请在 compute_advantages 中补全代码")
+    values_detached = values.detach()
+    advantages = rewards - values_detached
+    if normalize:
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+    assert rewards.shape == advantages.shape
+    assert values.shape == advantages.shape
+    return advantages
 
 
 def ppo_clip_loss(
@@ -56,7 +63,13 @@ def ppo_clip_loss(
     # TODO 3: 计算 clipped_ratio = r_t.clamp(1 - clip_range, 1 + clip_range)
     # TODO 4: 计算 clipped = clipped_ratio * advantages
     # TODO 5: 取 element-wise 最小值，然后取负均值作为损失
-    raise NotImplementedError("请在 ppo_clip_loss 中补全代码")
+    #raise NotImplementedError("请在 ppo_clip_loss 中补全代码")
+    r_t = torch.exp(new_logprobs - old_logprobs)
+    unclipped = r_t * advantages
+    clipped_ratio = r_t.clamp(1 - clip_range, 1 + clip_range)
+    clipped = clipped_ratio * advantages
+    loss = -torch.mean(torch.min(unclipped, clipped))
+    return loss
 
 
 def ppo_step(

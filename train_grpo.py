@@ -3,7 +3,7 @@ import math
 import torch
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedDataParallelKwargs
 from transformers import set_seed
 from torch.utils.tensorboard import SummaryWriter
 
@@ -19,7 +19,8 @@ from rlhf_practice.rl.grpo import grpo_step
 
 
 def main():
-    accelerator = Accelerator()
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
     device = accelerator.device
 
     set_seed(42)
@@ -30,6 +31,11 @@ def main():
 
     tokenizer = load_tokenizer(model_cfg.model_name)
     model = PolicyValueModel(model_cfg.model_name)
+    
+    # GRPO 算法中只使用策略网络计算 logprobs，不需要 value head
+    # 为了避免 DDP 报错（因为 value_head 参数没有参与 loss 计算），我们需要冻结它
+    for param in model.value_head.parameters():
+        param.requires_grad = False
 
     dataset = load_text_dataset(data_cfg)
 

@@ -121,6 +121,11 @@ def evaluate_sequences(
     logprobs = masked_log_probs.sum(dim=-1)  # [B]
 
     # 价值函数只依赖 prompt
-    values = model.get_values(prompt_input_ids, prompt_attention_mask)  # [B]
+    if hasattr(model, "get_values"):
+        values = model.get_values(prompt_input_ids, prompt_attention_mask)
+    elif hasattr(model, "module") and hasattr(model.module, "get_values"):
+        values = model.module.get_values(prompt_input_ids, prompt_attention_mask)
+    else:
+        raise AttributeError("Model does not have get_values method")
     return logprobs, values
 

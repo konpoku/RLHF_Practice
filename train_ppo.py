@@ -102,6 +102,13 @@ def main():
                 gen_sequences[:, input_ids.size(1) :],
                 skip_special_tokens=True,
             )
+            #print("Generated texts:", generated_texts)
+            # save the text in json file
+            import json
+            with open("generated_texts.json", "a") as f:
+                for text in generated_texts:
+                    json.dump({"generated_text": text}, f, ensure_ascii=False)
+                    f.write("\n")
             rewards = simple_sentiment_reward(generated_texts).to(device)
 
             # 使用当前模型计算 old_logprobs 和 values（之后会作为 PPO 的基准）

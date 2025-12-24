@@ -37,7 +37,16 @@ def compute_group_advantages(
     # TODO 3: 计算 advantages = rewards_group - baseline
     # TODO 4: 展开回 [B * K]
     # TODO 5: (可选) 如果 normalize=True，对 advantages 标准化
-    raise NotImplementedError("请在 compute_group_advantages 中补全代码")
+    #raise NotImplementedError("请在 compute_group_advantages 中补全代码")
+    batch_size = rewards.shape[0] // group_size
+    rewards_group = rewards.view(batch_size, group_size)
+    baseline = rewards_group.mean(dim=1, keepdim=True)
+    advantages = rewards_group - baseline
+    advantages = advantages.view(-1)
+    if normalize:
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+    assert rewards.shape == advantages.shape
+    return advantages
 
 
 def grpo_loss(
@@ -53,7 +62,10 @@ def grpo_loss(
     """
     # TODO 1: 确保 advantages 不反向传播梯度（使用 detach）
     # TODO 2: 按照上面的公式实现带权重的策略梯度损失（求均值）
-    raise NotImplementedError("请在 grpo_loss 中补全代码")
+    #raise NotImplementedError("请在 grpo_loss 中补全代码")
+    advantages_detached = advantages.detach()
+    loss = -torch.mean(advantages_detached * logprobs)
+    return loss
 
 
 def grpo_step(
