@@ -3,7 +3,8 @@ import math
 import torch
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-from accelerate import Accelerator
+from accelerate import Accelerator, FullyShardedDataParallelPlugin
+from torch.distributed.fsdp.fully_sharded_data_parallel import FullOptimStateDictConfig, FullStateDictConfig
 from transformers import set_seed
 from torch.utils.tensorboard import SummaryWriter
 
@@ -19,7 +20,12 @@ from rlhf_practice.rl.grpo import grpo_step
 
 
 def main():
-    accelerator = Accelerator()
+    fsdp_plugin = FullyShardedDataParallelPlugin(
+        state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
+        optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True),
+        use_orig_params=True,
+    )
+    accelerator = Accelerator(fsdp_plugin=fsdp_plugin)
     device = accelerator.device
 
     set_seed(42)
@@ -30,6 +36,11 @@ def main():
 
     tokenizer = load_tokenizer(model_cfg.model_name)
     model = PolicyValueModel(model_cfg.model_name)
+    
+    # GRPO 算法中只使用策略网络计算 logprobs，不需要 value head
+    # 为了避免 DDP 报错（因为 value_head 参数没有参与 loss 计算），我们需要冻结它
+    for param in model.value_head.parameters():
+        param.requires_grad = False
 
     dataset = load_text_dataset(data_cfg)
 
@@ -49,6 +60,10 @@ def main():
     model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
     unwrapped_model = accelerator.unwrap_model(model)
 
+    # Debug info
+    print(f"Distributed Type: {accelerator.distributed_type}")
+    print(f"Model Type: {type(model)}")
+    
     model.train()
 
     writer = None
@@ -93,15 +108,24 @@ def main():
 
             # 对每个 prompt 生成 group_size 个回复
             with torch.no_grad():
-                gen_sequences = unwrapped_model.generate(
-                    input_ids=expanded_input_ids,
-                    attention_mask=expanded_attention_mask,
-                    max_new_tokens=data_cfg.max_new_tokens,
-                    do_sample=True,
-                    top_k=50,
-                    top_p=0.95,
-                    pad_token_id=tokenizer.eos_token_id,
-                )
+                # 如果是 FSDP，需要 summon_full_params
+                if accelerator.distributed_type == "FSDP":
+                    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+                    context = FSDP.summon_full_params(model, writeback=False, rank0_only=False)
+                else:
+                    from contextlib import nullcontext
+                    context = nullcontext()
+
+                with context:
+                    gen_sequences = unwrapped_model.generate(
+                        input_ids=expanded_input_ids,
+                        attention_mask=expanded_attention_mask,
+                        max_new_tokens=data_cfg.max_new_tokens,
+                        do_sample=True,
+                        top_k=50,
+                        top_p=0.95,
+                        pad_token_id=tokenizer.eos_token_id,
+                    )
 
             # 生成文本和奖励（展平为 [B * K]）
             generated_texts = tokenizer.batch_decode(
