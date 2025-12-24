@@ -18,7 +18,36 @@ class PolicyValueModel(nn.Module):
         self.model = AutoModelForCausalLM.from_pretrained(model_name)
         self.value_head = nn.Linear(self.model.config.hidden_size, 1)
 
-    def forward(self, input_ids, attention_mask=None):
+    def forward(self, input_ids, attention_mask=None, return_values=False):
+        if return_values:
+            outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+                return_dict=True,
+            )
+            hidden_states = outputs.hidden_states[-1]  # [B, L, H]
+
+            if attention_mask is None:
+                # 没有 mask，则认为全部为有效 token
+                last_indices = torch.full(
+                    (hidden_states.size(0),),
+                    hidden_states.size(1) - 1,
+                    dtype=torch.long,
+                    device=hidden_states.device,
+                )
+            else:
+                # 每个样本最后一个非 pad 的位置
+                lengths = attention_mask.sum(dim=-1)  # [B]
+                last_indices = lengths - 1
+
+            batch_indices = torch.arange(
+                hidden_states.size(0), device=hidden_states.device
+            )
+            last_hidden = hidden_states[batch_indices, last_indices]  # [B, H]
+            values = self.value_head(last_hidden).squeeze(-1)  # [B]
+            return values
+
         return self.model(input_ids=input_ids, attention_mask=attention_mask)
 
     @torch.no_grad()
@@ -121,11 +150,11 @@ def evaluate_sequences(
     logprobs = masked_log_probs.sum(dim=-1)  # [B]
 
     # 价值函数只依赖 prompt
-    if hasattr(model, "get_values"):
-        values = model.get_values(prompt_input_ids, prompt_attention_mask)
-    elif hasattr(model, "module") and hasattr(model.module, "get_values"):
-        values = model.module.get_values(prompt_input_ids, prompt_attention_mask)
-    else:
-        raise AttributeError("Model does not have get_values method")
+    # 使用 forward(return_values=True) 以兼容 FSDP
+    values = model(
+        input_ids=prompt_input_ids,
+        attention_mask=prompt_attention_mask,
+        return_values=True
+    )
     return logprobs, values
 

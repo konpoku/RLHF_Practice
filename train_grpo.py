@@ -3,7 +3,8 @@ import math
 import torch
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-from accelerate import Accelerator, DistributedDataParallelKwargs
+from accelerate import Accelerator, FullyShardedDataParallelPlugin
+from torch.distributed.fsdp.fully_sharded_data_parallel import FullOptimStateDictConfig, FullStateDictConfig
 from transformers import set_seed
 from torch.utils.tensorboard import SummaryWriter
 
@@ -19,8 +20,12 @@ from rlhf_practice.rl.grpo import grpo_step
 
 
 def main():
-    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-    accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
+    fsdp_plugin = FullyShardedDataParallelPlugin(
+        state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
+        optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True),
+        use_orig_params=True,
+    )
+    accelerator = Accelerator(fsdp_plugin=fsdp_plugin)
     device = accelerator.device
 
     set_seed(42)
@@ -55,6 +60,10 @@ def main():
     model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
     unwrapped_model = accelerator.unwrap_model(model)
 
+    # Debug info
+    print(f"Distributed Type: {accelerator.distributed_type}")
+    print(f"Model Type: {type(model)}")
+    
     model.train()
 
     writer = None
@@ -99,15 +108,24 @@ def main():
 
             # 对每个 prompt 生成 group_size 个回复
             with torch.no_grad():
-                gen_sequences = unwrapped_model.generate(
-                    input_ids=expanded_input_ids,
-                    attention_mask=expanded_attention_mask,
-                    max_new_tokens=data_cfg.max_new_tokens,
-                    do_sample=True,
-                    top_k=50,
-                    top_p=0.95,
-                    pad_token_id=tokenizer.eos_token_id,
-                )
+                # 如果是 FSDP，需要 summon_full_params
+                if accelerator.distributed_type == "FSDP":
+                    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+                    context = FSDP.summon_full_params(model, writeback=False, rank0_only=False)
+                else:
+                    from contextlib import nullcontext
+                    context = nullcontext()
+
+                with context:
+                    gen_sequences = unwrapped_model.generate(
+                        input_ids=expanded_input_ids,
+                        attention_mask=expanded_attention_mask,
+                        max_new_tokens=data_cfg.max_new_tokens,
+                        do_sample=True,
+                        top_k=50,
+                        top_p=0.95,
+                        pad_token_id=tokenizer.eos_token_id,
+                    )
 
             # 生成文本和奖励（展平为 [B * K]）
             generated_texts = tokenizer.batch_decode(
